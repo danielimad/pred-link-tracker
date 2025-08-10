@@ -5,15 +5,13 @@ import { NextRequest, NextResponse } from 'next/server';
 function randomId(len = 6) {
   const alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789';
   let out = '';
-  for (let i = 0; i < len; i++) {
-    out += alphabet[Math.floor(Math.random() * alphabet.length)];
-  }
+  for (let i = 0; i < len; i++) out += alphabet[Math.floor(Math.random() * alphabet.length)];
   return out;
 }
 
 export async function POST(req: NextRequest) {
-  const auth =req.headers.get('authorization') || '';
-  const expected = `Bearer ${process.env.ADMIN_SECRET}`;
+  const auth = req.headers.get('authorization') || '';
+  const expected = 'Bearer ' + process.env.ADMIN_SECRET;
   if (!process.env.ADMIN_SECRET || auth !== expected) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
@@ -39,4 +37,4 @@ export async function POST(req: NextRequest) {
   }
 
   return NextResponse.json({ id, url: `/${id}`, label }, { status: 201 });
-}`
+}
