@@ -1,39 +1,33 @@
+// middleware.ts
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 
-// Configure middleware to run on all paths except internal assets and api routes
-export const config = {
-  matcher: ['/((?!_next|api|favicon.ico).*)']
-};
+export const config = { matcher: ['/((?!_next|api|favicon\\.ico).*)'] };
 
-// Edge middleware: triggers tracking API for any single-segment path like /abcd
-export async function middleware(req: NextRequest) {
-  const { pathname } = req.nextUrl;
-  // Check that the request path is a single segment (e.g. "/abcd")
-  const isSingleSegment =
-    pathname !== '/' &&
-    pathname.split('/').filter(Boolean).length === 1;
+export function middleware(req: NextRequest) {
+  const path = req.nextUrl.pathname.slice(1);
 
-  if (isSingleSegment) {
-    // Fire-and-forget fetch to our tracking endpoint. Use AbortController
-    // so the request won't block page rendering.
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 1200);
-    try {
-      await fetch(new URL('/api/track', req.url), {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          // Pass the original pathname via header so the API knows which link ID
-          'x-pathname': pathname
-        },
-        body: JSON.stringify({}),
-        signal: controller.signal,
-        cache: 'no-store'
-      }).catch(() => {});
-    } finally {
-      clearTimeout(timeout);
-    }
+  if (/^[0-9a-f]{8}$/i.test(path)) {
+    const xff = req.headers.get('x-forwarded-for') || '';
+    const ip  = xff.split(',')[0].trim(); // real client IP (best-effort)
+    const ua  = req.headers.get('user-agent') || '';
+    const ref = req.headers.get('referer') || '';
+
+    // Fire-and-forget server enrichment
+    req.waitUntil(fetch(new URL('/api/track', req.url), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: path, ip, ua, ref }),
+      cache: 'no-store'
+    }).catch(() => {}));
+
+    // Also serve a page that runs a tiny beacon for device signals
+    return NextResponse.rewrite(new URL(`/thanks?id=${path}`, req.url));
   }
-  return NextResponse.next();
+
+  // Ask browser for high-entropy UA-CH on next request
+  const res = NextResponse.next();
+  res.headers.set('Accept-CH', 'Sec-CH-UA, Sec-CH-UA-Platform, Sec-CH-UA-Model, Sec-CH-UA-Platform-Version, Sec-CH-UA-Arch, Sec-CH-UA-Bitness, Sec-CH-UA-Full-Version-List');
+  res.headers.set('Permissions-Policy', 'ch-ua=(self), ch-ua-platform=(self), ch-ua-model=(self), ch-ua-platform-version=(self), ch-ua-arch=(self), ch-ua-bitness=(self), ch-ua-full-version-list=(self)');
+  return res;
 }
