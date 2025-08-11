@@ -1,3 +1,4 @@
+// app/api/track/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 
 type Geo = {
@@ -51,7 +52,7 @@ async function ipdata(ip: string, key?: string): Promise<Partial<Geo>> {
   };
 }
 
-// Free fallback (no key): ipapi.co
+// Free fallback (no key)
 async function ipapi(ip: string): Promise<Partial<Geo>> {
   if (!ip) return {};
   const r = await fetch(`https://ipapi.co/${encodeURIComponent(ip)}/json/`, { cache: 'no-store' });
@@ -69,8 +70,6 @@ async function ipapi(ip: string): Promise<Partial<Geo>> {
     tz: j.timezone,
   };
 }
-
-function pick<T>(a: T | undefined, b: T | undefined): T | undefined { return a ?? b; }
 
 function mergeGeo(a: Partial<Geo>, b: Partial<Geo>, c: Partial<Geo>, hdr: Partial<Geo>, ip: string): Geo {
   return {
@@ -98,10 +97,10 @@ export async function POST(req: NextRequest) {
   // Real client IP from first XFF element
   const xff = req.headers.get('x-forwarded-for') || '';
   const ipHeader = xff.split(',')[0].trim();
-  const ip = ipHeader || '';  // do not trust body ip
+  const ip = ipHeader || '';
 
-  // Vercel geo header fallbacks (always available on Edge → Node boundary)
-  const hdrGeo: Partial<Geo> = {
+  // Vercel header hints as a last resort
+  const hdr: Partial<Geo> = {
     ip,
     country: req.headers.get('x-vercel-ip-country') || undefined,
     region:  req.headers.get('x-vercel-ip-country-region') || req.headers.get('x-vercel-ip-region') || undefined,
@@ -109,18 +108,16 @@ export async function POST(req: NextRequest) {
     tz:      req.headers.get('x-vercel-ip-timezone') || undefined,
   };
 
-  // Enrich from providers (parallel, tolerate failures)
+  // Enrich (parallel, tolerate failures)
   const [p1, p2, p3] = await Promise.allSettled([
     ipinfo(ip, process.env.IPINFO_TOKEN),
     ipdata(ip, process.env.IPDATA_KEY),
     ipapi(ip),
   ]);
-
   const g1 = p1.status === 'fulfilled' ? p1.value : {};
   const g2 = p2.status === 'fulfilled' ? p2.value : {};
   const g3 = p3.status === 'fulfilled' ? p3.value : {};
-
-  const g = mergeGeo(g1, g2, g3, hdrGeo, ip);
+  const g  = mergeGeo(g1, g2, g3, hdr, ip);
 
   const payload = {
     id,
