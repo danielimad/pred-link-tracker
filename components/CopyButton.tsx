@@ -8,7 +8,7 @@ export default function CopyButton({ text, className }: { text: string; classNam
     try {
       await navigator.clipboard.writeText(text);
     } catch {
-      // Fallback for odd environments
+      // Fallback for rare environments
       const ta = document.createElement('textarea');
       ta.value = text;
       document.body.appendChild(ta);
