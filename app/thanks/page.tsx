@@ -1,44 +1,41 @@
-// app/thanks/page.tsx
-export const dynamic = 'force-dynamic'; // ensure not prerendered/cached
+export const dynamic = 'force-dynamic';
 
 export default function ThanksPage() {
+  const fallback = process.env.NEXT_PUBLIC_FALLBACK_URL || ''; // must be NEXT_PUBLIC_*
+
   return (
     <html>
-      <body>
-        <p>OK</p>
+      <body style={{ fontFamily: 'system-ui', padding: 12 }}>
+        <div id="status">Loading…</div>
         <script
           dangerouslySetInnerHTML={{
             __html: `
               (async () => {
-                const url = new URL(location.href);
-                let id = url.searchParams.get('id') || '';
-
-                // Fallback: if someone hits /{id} directly without ?id= (shouldn't, because we redirect),
-                // try to parse from the path.
-                if (!id) {
-                  const seg = url.pathname.split('/').filter(Boolean);
-                  if (seg.length === 1 && /^[0-9a-f]{8}$/i.test(seg[0])) id = seg[0];
-                }
-
-                const ua  = navigator.userAgent || '';
-                const ref = document.referrer || '';
-                const fallback = ${JSON.stringify(process.env.NEXT_PUBLIC_FALLBACK_URL || '')};
-
+                const status = (t) => { try { document.getElementById('status').textContent = t; } catch {} };
                 try {
-                  // Don’t block UX: either log successfully or time out after 600ms
+                  const url = new URL(location.href);
+                  let id = url.searchParams.get('id') || '';
+                  if (!id) {
+                    const seg = url.pathname.split('/').filter(Boolean);
+                    if (seg.length === 1 && /^[0-9a-f]{8}$/i.test(seg[0])) id = seg[0];
+                  }
+                  status('Tracking visit for ' + id + ' …');
+
                   await Promise.race([
                     fetch('/api/track', {
                       method: 'POST',
                       headers: { 'content-type': 'application/json' },
-                      body: JSON.stringify({ id, ua, ref })
+                      body: JSON.stringify({ id, ua: navigator.userAgent || '', ref: document.referrer || '' })
                     }),
-                    new Promise(resolve => setTimeout(resolve, 600))
+                    new Promise(res => setTimeout(res, 600))
                   ]);
-                } catch (e) {
-                  // swallow
-                }
 
-                if (fallback) location.replace(fallback);
+                  status('Done. Redirecting…');
+                } catch (e) {
+                  status('Tracking failed. Redirecting…');
+                }
+                const fb = ${JSON.stringify(process.env.NEXT_PUBLIC_FALLBACK_URL || '')};
+                if (fb) location.replace(fb);
               })();
             `,
           }}
