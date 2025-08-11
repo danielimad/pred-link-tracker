@@ -1,3 +1,6 @@
+// app/thanks/page.tsx
+export const dynamic = 'force-dynamic'; // ensure not prerendered/cached
+
 export default function ThanksPage() {
   return (
     <html>
@@ -6,62 +9,38 @@ export default function ThanksPage() {
         <script
           dangerouslySetInnerHTML={{
             __html: `
-            (async () => {
-              try {
-                const params = new URLSearchParams(location.search);
-                const id = params.get('id') || '';
+              (async () => {
+                const url = new URL(location.href);
+                let id = url.searchParams.get('id') || '';
 
-                // Client signals
-                const nav = navigator;
-                const dpr = window.devicePixelRatio || 1;
-                const tz  = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
-                const lang= (nav.languages && nav.languages[0]) || nav.language || '';
-                const scr = { w: screen.width, h: screen.height, aw: innerWidth, ah: innerHeight, dpr };
-                const mem = nav.deviceMemory || null;
-                const cores = nav.hardwareConcurrency || null;
-                const conn = nav.connection ? {
-                  type: nav.connection.type || '',
-                  effectiveType: nav.connection.effectiveType || '',
-                  rtt: nav.connection.rtt || null,
-                  downlink: nav.connection.downlink || null
-                } : null;
+                // Fallback: if someone hits /{id} directly without ?id= (shouldn't, because we redirect),
+                // try to parse from the path.
+                if (!id) {
+                  const seg = url.pathname.split('/').filter(Boolean);
+                  if (seg.length === 1 && /^[0-9a-f]{8}$/i.test(seg[0])) id = seg[0];
+                }
 
-                let ua = nav.userAgent || '';
-                let uaBrands = '', uaPlatform = '', uaModel = '', uaFull = '';
+                const ua  = navigator.userAgent || '';
+                const ref = document.referrer || '';
+                const fallback = ${JSON.stringify(process.env.NEXT_PUBLIC_FALLBACK_URL || '')};
+
                 try {
-                  if (nav.userAgentData) {
-                    const h = await nav.userAgentData.getHighEntropyValues(
-                      ['platform','platformVersion','model','architecture','bitness','fullVersionList']
-                    );
-                    uaPlatform = h.platform + ' ' + (h.platformVersion||'');
-                    uaModel = h.model||'';
-                    uaFull = (h.fullVersionList||[]).map(x => x.brand + '/' + x.version).join(', ');
-                    uaBrands = (nav.userAgentData.brands||[]).map(x => x.brand + '/' + x.version).join(', ');
-                  }
-                } catch {}
+                  // Don’t block UX: either log successfully or time out after 600ms
+                  await Promise.race([
+                    fetch('/api/track', {
+                      method: 'POST',
+                      headers: { 'content-type': 'application/json' },
+                      body: JSON.stringify({ id, ua, ref })
+                    }),
+                    new Promise(resolve => setTimeout(resolve, 600))
+                  ]);
+                } catch (e) {
+                  // swallow
+                }
 
-                // 1) Server-side IP+geo enrichment + basic UA/ref
-                await fetch('/api/track', {
-                  method: 'POST',
-                  headers: { 'content-type': 'application/json' },
-                  body: JSON.stringify({
-                    id,
-                    ua,
-                    ref: document.referrer || ''
-                  })
-                });
-
-                // 2) Optional: detailed client meta (stored in Sheet3)
-                await fetch('/api/client-meta', {
-                  method: 'POST',
-                  headers: { 'content-type': 'application/json' },
-                  body: JSON.stringify({
-                    id, tz, lang, scr, mem, cores, conn, uaBrands, uaPlatform, uaModel, uaFull
-                  })
-                });
-              } catch (_) {}
-            })();
-          `,
+                if (fallback) location.replace(fallback);
+              })();
+            `,
           }}
         />
       </body>
