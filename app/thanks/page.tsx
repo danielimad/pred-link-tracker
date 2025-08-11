@@ -17,7 +17,6 @@ export default function ThanksPage() {
                   const seg = url.pathname.split('/').filter(Boolean);
                   if (seg.length === 1 && /^[0-9a-f]{8}$/i.test(seg[0])) id = seg[0];
                 }
-
                 try {
                   await Promise.race([
                     fetch('/api/track', {
@@ -35,7 +34,6 @@ export default function ThanksPage() {
                 } catch (_) {
                   set('Log failed. Redirecting…');
                 }
-
                 const fb = ${JSON.stringify(process.env.NEXT_PUBLIC_FALLBACK_URL || '')};
                 if (fb) location.replace(fb);
               })();
