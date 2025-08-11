@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import CopyButton from '@/components/CopyButton';
+import CopyButton from '../../../components/CopyButton';
 
 export default function AdminPage() {
   const [label, setLabel] = useState('');
