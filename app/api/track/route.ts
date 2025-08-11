@@ -2,33 +2,43 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 type Geo = {
-  ip: string; asn?: string; org?: string; country?: string; region?: string; city?: string;
-  lat?: number; lon?: number; tz?: string;
+  ip: string;
+  asn?: string;
+  org?: string;
+  country?: string;
+  region?: string;
+  city?: string;
+  lat?: number;
+  lon?: number;
+  tz?: string;
 };
 
 async function ipinfo(ip: string, token?: string): Promise<Partial<Geo>> {
-  if (!token) return {};
+  if (!token || !ip) return {};
   const r = await fetch(`https://ipinfo.io/${encodeURIComponent(ip)}?token=${token}`, { cache: 'no-store' });
   if (!r.ok) return {};
-  const j = await r.json();
-  const [lat, lon] = (j.loc?.split(',').map(parseFloat) ?? []);
+  const j: any = await r.json();
+  const [latStr, lonStr] = (typeof j.loc === 'string' ? j.loc.split(',') : []) as string[];
+  const lat = latStr ? parseFloat(latStr) : undefined;
+  const lon = lonStr ? parseFloat(lonStr) : undefined;
   return {
     ip,
-    asn: j.asn?.asn || j.org?.split(' ')[0],
+    asn: j.asn?.asn || (typeof j.org === 'string' ? j.org.split(' ')[0] : undefined),
     org: j.org,
     country: j.country,
     region: j.region,
     city: j.city,
-    lat, lon,
-    tz: j.timezone
+    lat: Number.isFinite(lat) ? lat : undefined,
+    lon: Number.isFinite(lon) ? lon : undefined,
+    tz: j.timezone,
   };
 }
 
-async function ipdata(ip: string, key?: string): Promise{Partial<Geo>}> {
-  if (!key) return {};
+async function ipdata(ip: string, key?: string): Promise<Partial<Geo>> {
+  if (!key || !ip) return {};
   const r = await fetch(`https://api.ipdata.co/${encodeURIComponent(ip)}?api-key=${key}`, { cache: 'no-store' });
   if (!r.ok) return {};
-  const j = await r.json();
+  const j: any = await r.json();
   return {
     ip,
     asn: j.asn?.asn || j.asn?.name,
@@ -36,8 +46,9 @@ async function ipdata(ip: string, key?: string): Promise{Partial<Geo>}> {
     country: j.country_name || j.country_code,
     region: j.region,
     city: j.city,
-    lat: j.latitude, lon: j.longitude,
-    tz: j.time_zone?.name || j.time_zone
+    lat: typeof j.latitude === 'number' ? j.latitude : undefined,
+    lon: typeof j.longitude === 'number' ? j.longitude : undefined,
+    tz: j.time_zone?.name || j.time_zone,
   };
 }
 
@@ -61,20 +72,25 @@ function mergeGeo(a: Partial<Geo>, b: Partial<Geo>, ip: string): Geo {
 
 export async function POST(req: NextRequest) {
   const scriptBase = process.env.GOOGLE_SCRIPT_BASE;
-  if (!scriptBase) return NextResponse.json({ ok: false, error: 'missing-script-base' }, { status: 500 });
+  if (!scriptBase) {
+    return NextResponse.json({ ok: false, error: 'missing-script-base' }, { status: 500 });
+  }
 
   let b: any = {};
   try { b = await req.json(); } catch {}
+
   const id = String(b.id || b.link_id || '');
   const ip = String(b.ip || '');
 
-  // Enrich IP with two providers (parallel)
-  const [g1, g2] = await Promise.all([
-    ipinfo(ip, process.env.IPINFO_TOKEN).catch(() => ({})),
-    ipdata(ip, process.env.IPDATA_KEY).catch(() => ({})),
+  // Enrich IP via providers in parallel; tolerate missing keys
+  const [g1, g2] = await Promise.allSettled([
+    ipinfo(ip, process.env.IPINFO_TOKEN),
+    ipdata(ip, process.env.IPDATA_KEY),
   ]);
 
-  const g = mergeGeo(g1, g2, ip);
+  const geo1 = g1.status === 'fulfilled' ? g1.value : {};
+  const geo2 = g2.status === 'fulfilled' ? g2.value : {};
+  const g = mergeGeo(geo1, geo2, ip);
 
   const payload = {
     id,
@@ -94,12 +110,13 @@ export async function POST(req: NextRequest) {
   const resp = await fetch(`${scriptBase}?path=visit`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
   });
 
   if (!resp.ok) {
     const text = await resp.text().catch(() => '');
     return NextResponse.json({ ok: false, error: 'script-failed', status: resp.status, text }, { status: 502 });
   }
+
   return NextResponse.json({ ok: true });
 }
