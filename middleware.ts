@@ -1,19 +1,15 @@
-// middleware.ts
+// middleware.ts (optional safety net)
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
+
+const ID_OK = /^[A-Za-z0-9_-]{3,32}$/;
 
 export const config = { matcher: ['/((?!_next|api|favicon\\.ico).*)'] };
 
 export function middleware(req: NextRequest) {
-  const id = req.nextUrl.pathname.slice(1);
-  if (/^[0-9a-f]{8}$/i.test(id)) {
-    const url = new URL(`/thanks?id=${id}`, req.url);
-    const res = NextResponse.redirect(url, { status: 302 });
-    res.headers.set('x-mw', 'hit');
-    res.headers.set('x-mw-location', url.pathname + url.search);
-    return res;
+  const slug = req.nextUrl.pathname.slice(1);
+  if (ID_OK.test(slug)) {
+    return NextResponse.redirect(new URL(`/thanks?id=${slug}`, req.url), { status: 302 });
   }
-  const res = NextResponse.next();
-  res.headers.set('x-mw', 'hit');
-  return res;
+  return NextResponse.next();
 }
