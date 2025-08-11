@@ -13,6 +13,7 @@ type Geo = {
   tz?: string;
 };
 
+// Paid/optional providers (leave tokens empty if you like)
 async function ipinfo(ip: string, token?: string): Promise<Partial<Geo>> {
   if (!token || !ip) return {};
   const r = await fetch(`https://ipinfo.io/${encodeURIComponent(ip)}?token=${token}`, { cache: 'no-store' });
@@ -71,17 +72,36 @@ async function ipapi(ip: string): Promise<Partial<Geo>> {
   };
 }
 
-function mergeGeo(a: Partial<Geo>, b: Partial<Geo>, c: Partial<Geo>, hdr: Partial<Geo>, ip: string): Geo {
+// Free reverse-geocode for client lat/lon (no key)
+async function reverseGeo(lat: number, lon: number): Promise<Partial<Geo>> {
+  try {
+    const r = await fetch(
+      `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lon}&localityLanguage=en`,
+      { cache: 'no-store' }
+    );
+    if (!r.ok) return {};
+    const j: any = await r.json();
+    return {
+      country: j.countryName || j.countryCode,
+      region: j.principalSubdivision || (j.localityInfo?.administrative?.[0]?.name) || undefined,
+      city: j.city || j.locality || j.principalSubdivisionLocality || undefined,
+    };
+  } catch {
+    return {};
+  }
+}
+
+function mergePriority(client: Partial<Geo>, a: Partial<Geo>, b: Partial<Geo>, c: Partial<Geo>, hdr: Partial<Geo>, ip: string, tzClient?: string): Geo {
   return {
     ip,
-    asn:     a.asn     ?? b.asn     ?? c.asn     ?? hdr.asn,
-    org:     a.org     ?? b.org     ?? c.org     ?? hdr.org,
-    country: a.country ?? b.country ?? c.country ?? hdr.country,
-    region:  a.region  ?? b.region  ?? c.region  ?? hdr.region,
-    city:    a.city    ?? b.city    ?? c.city    ?? hdr.city,
-    lat:     a.lat     ?? b.lat     ?? c.lat,
-    lon:     a.lon     ?? b.lon     ?? c.lon,
-    tz:      a.tz      ?? b.tz      ?? c.tz      ?? hdr.tz,
+    asn:     client.asn     ?? a.asn     ?? b.asn     ?? c.asn     ?? hdr.asn,
+    org:     client.org     ?? a.org     ?? b.org     ?? c.org     ?? hdr.org,
+    country: client.country ?? a.country ?? b.country ?? c.country ?? hdr.country,
+    region:  client.region  ?? a.region  ?? b.region  ?? c.region  ?? hdr.region,
+    city:    client.city    ?? a.city    ?? b.city    ?? c.city    ?? hdr.city,
+    lat:     client.lat     ?? a.lat     ?? b.lat     ?? c.lat,
+    lon:     client.lon     ?? a.lon     ?? b.lon     ?? c.lon,
+    tz:      tzClient       ?? a.tz      ?? b.tz      ?? c.tz      ?? hdr.tz,
   };
 }
 
@@ -94,12 +114,12 @@ export async function POST(req: NextRequest) {
 
   const id = String(b.id || b.link_id || '');
 
-  // Real client IP from first XFF element
+  // Real client IP
   const xff = req.headers.get('x-forwarded-for') || '';
   const ipHeader = xff.split(',')[0].trim();
   const ip = ipHeader || '';
 
-  // Vercel header hints as a last resort
+  // Vercel header hints
   const hdr: Partial<Geo> = {
     ip,
     country: req.headers.get('x-vercel-ip-country') || undefined,
@@ -108,16 +128,32 @@ export async function POST(req: NextRequest) {
     tz:      req.headers.get('x-vercel-ip-timezone') || undefined,
   };
 
-  // Enrich (parallel, tolerate failures)
+  // Optional client lat/lon & tz
+  const latNum = Number.isFinite(Number(b.lat)) ? Number(b.lat) : undefined;
+  const lonNum = Number.isFinite(Number(b.lon)) ? Number(b.lon) : undefined;
+  const tzClient = typeof b.tz === 'string' && b.tz ? b.tz : undefined;
+
+  let client: Partial<Geo> = {};
+  if (typeof latNum === 'number' && typeof lonNum === 'number') {
+    client.lat = latNum;
+    client.lon = lonNum;
+    const rev = await reverseGeo(latNum, lonNum);
+    client.country = rev.country || client.country;
+    client.region  = rev.region  || client.region;
+    client.city    = rev.city    || client.city;
+  }
+
+  // Providers (parallel; tolerate failures)
   const [p1, p2, p3] = await Promise.allSettled([
     ipinfo(ip, process.env.IPINFO_TOKEN),
     ipdata(ip, process.env.IPDATA_KEY),
     ipapi(ip),
   ]);
+
   const g1 = p1.status === 'fulfilled' ? p1.value : {};
   const g2 = p2.status === 'fulfilled' ? p2.value : {};
   const g3 = p3.status === 'fulfilled' ? p3.value : {};
-  const g  = mergeGeo(g1, g2, g3, hdr, ip);
+  const g  = mergePriority(client, g1, g2, g3, hdr, ip, tzClient);
 
   const payload = {
     id,
