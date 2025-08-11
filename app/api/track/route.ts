@@ -1,4 +1,3 @@
-// app/api/track/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 
 type Geo = {
@@ -18,7 +17,7 @@ async function ipinfo(ip: string, token?: string): Promise<Partial<Geo>> {
   const r = await fetch(`https://ipinfo.io/${encodeURIComponent(ip)}?token=${token}`, { cache: 'no-store' });
   if (!r.ok) return {};
   const j: any = await r.json();
-  const [latStr, lonStr] = (typeof j.loc === 'string' ? j.loc.split(',') : []) as string[];
+  const [latStr, lonStr] = typeof j.loc === 'string' ? j.loc.split(',') : [];
   const lat = latStr ? parseFloat(latStr) : undefined;
   const lon = lonStr ? parseFloat(lonStr) : undefined;
   return {
@@ -52,50 +51,76 @@ async function ipdata(ip: string, key?: string): Promise<Partial<Geo>> {
   };
 }
 
-function pick<T>(a: T | undefined, b: T | undefined): T | undefined {
-  return a ?? b;
-}
-
-function mergeGeo(a: Partial<Geo>, b: Partial<Geo>, ip: string): Geo {
+// Free fallback (no key): ipapi.co
+async function ipapi(ip: string): Promise<Partial<Geo>> {
+  if (!ip) return {};
+  const r = await fetch(`https://ipapi.co/${encodeURIComponent(ip)}/json/`, { cache: 'no-store' });
+  if (!r.ok) return {};
+  const j: any = await r.json();
   return {
     ip,
-    asn:     pick(a.asn,     b.asn),
-    org:     pick(a.org,     b.org),
-    country: pick(a.country, b.country),
-    region:  pick(a.region,  b.region),
-    city:    pick(a.city,    b.city),
-    lat:     pick(a.lat,     b.lat),
-    lon:     pick(a.lon,     b.lon),
-    tz:      pick(a.tz,      b.tz),
+    asn: j.asn,
+    org: j.org || j.orgname || j.org_name,
+    country: j.country_name || j.country,
+    region: j.region || j.region_code,
+    city: j.city,
+    lat: typeof j.latitude === 'number' ? j.latitude : parseFloat(j.latitude),
+    lon: typeof j.longitude === 'number' ? j.longitude : parseFloat(j.longitude),
+    tz: j.timezone,
+  };
+}
+
+function pick<T>(a: T | undefined, b: T | undefined): T | undefined { return a ?? b; }
+
+function mergeGeo(a: Partial<Geo>, b: Partial<Geo>, c: Partial<Geo>, hdr: Partial<Geo>, ip: string): Geo {
+  return {
+    ip,
+    asn:     a.asn     ?? b.asn     ?? c.asn     ?? hdr.asn,
+    org:     a.org     ?? b.org     ?? c.org     ?? hdr.org,
+    country: a.country ?? b.country ?? c.country ?? hdr.country,
+    region:  a.region  ?? b.region  ?? c.region  ?? hdr.region,
+    city:    a.city    ?? b.city    ?? c.city    ?? hdr.city,
+    lat:     a.lat     ?? b.lat     ?? c.lat,
+    lon:     a.lon     ?? b.lon     ?? c.lon,
+    tz:      a.tz      ?? b.tz      ?? c.tz      ?? hdr.tz,
   };
 }
 
 export async function POST(req: NextRequest) {
   const scriptBase = process.env.GOOGLE_SCRIPT_BASE;
-  if (!scriptBase) {
-    return NextResponse.json({ ok: false, error: 'missing-script-base' }, { status: 500 });
-  }
+  if (!scriptBase) return NextResponse.json({ ok: false, error: 'missing-script-base' }, { status: 500 });
 
-  // Get body (UA/ref; we will ignore any body ip)
   let b: any = {};
   try { b = await req.json(); } catch {}
 
   const id = String(b.id || b.link_id || '');
 
-  // ✅ Derive the real client IP from headers INSIDE the handler
+  // Real client IP from first XFF element
   const xff = req.headers.get('x-forwarded-for') || '';
   const ipHeader = xff.split(',')[0].trim();
-  const ip = ipHeader || ''; // prefer header; do NOT trust body ip
+  const ip = ipHeader || '';  // do not trust body ip
 
-  // Enrich IP via providers in parallel; tolerate missing keys
-  const [g1, g2] = await Promise.allSettled([
+  // Vercel geo header fallbacks (always available on Edge → Node boundary)
+  const hdrGeo: Partial<Geo> = {
+    ip,
+    country: req.headers.get('x-vercel-ip-country') || undefined,
+    region:  req.headers.get('x-vercel-ip-country-region') || req.headers.get('x-vercel-ip-region') || undefined,
+    city:    req.headers.get('x-vercel-ip-city') || undefined,
+    tz:      req.headers.get('x-vercel-ip-timezone') || undefined,
+  };
+
+  // Enrich from providers (parallel, tolerate failures)
+  const [p1, p2, p3] = await Promise.allSettled([
     ipinfo(ip, process.env.IPINFO_TOKEN),
     ipdata(ip, process.env.IPDATA_KEY),
+    ipapi(ip),
   ]);
 
-  const geo1 = g1.status === 'fulfilled' ? g1.value : {};
-  const geo2 = g2.status === 'fulfilled' ? g2.value : {};
-  const g = mergeGeo(geo1, geo2, ip);
+  const g1 = p1.status === 'fulfilled' ? p1.value : {};
+  const g2 = p2.status === 'fulfilled' ? p2.value : {};
+  const g3 = p3.status === 'fulfilled' ? p3.value : {};
+
+  const g = mergeGeo(g1, g2, g3, hdrGeo, ip);
 
   const payload = {
     id,
@@ -122,6 +147,5 @@ export async function POST(req: NextRequest) {
     const text = await resp.text().catch(() => '');
     return NextResponse.json({ ok: false, error: 'script-failed', status: resp.status, text }, { status: 502 });
   }
-
   return NextResponse.json({ ok: true });
 }
