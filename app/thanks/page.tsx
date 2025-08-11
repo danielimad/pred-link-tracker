@@ -24,38 +24,16 @@ export default function ThanksPage() {
                   if (seg.length === 1) id = seg[0];
                 }
 
-                // Attempt high-accuracy geolocation with a strict time budget
-                const geoPromise = new Promise((resolve) => {
-                  if (!navigator.geolocation) return resolve(null);
-                  let finished = false;
-                  const kill = setTimeout(() => { if (!finished) resolve(null); }, 1200);
-                  navigator.geolocation.getCurrentPosition(
-                    (pos) => {
-                      finished = true; clearTimeout(kill);
-                      resolve({
-                        lat: pos.coords.latitude,
-                        lon: pos.coords.longitude,
-                        acc: pos.coords.accuracy || null
-                      });
-                    },
-                    () => { finished = true; clearTimeout(kill); resolve(null); },
-                    { enableHighAccuracy: true, timeout: 1000, maximumAge: 0 }
-                  );
-                });
-
-                const tz = (Intl.DateTimeFormat().resolvedOptions().timeZone || '');
-                const ua = navigator.userAgent || '';
+                const tz  = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+                const ua  = navigator.userAgent || '';
                 const ref = document.referrer || '';
-
-                let geo = null;
-                try { geo = await geoPromise; } catch {}
 
                 try {
                   await Promise.race([
                     fetch('/api/track', {
                       method: 'POST',
                       headers: { 'content-type': 'application/json' },
-                      body: JSON.stringify({ id, ua, ref, tz, ...(geo || {}) })
+                      body: JSON.stringify({ id, ua, ref, tz })
                     }),
                     new Promise(r => setTimeout(r, 800))
                   ]);
@@ -64,7 +42,7 @@ export default function ThanksPage() {
                   set('Log failed. Redirecting…');
                 }
 
-                // Build fallback URL robustly
+                // Robust fallback URL
                 let fb = ${JSON.stringify(configured)} || ${JSON.stringify(defaultUrl)};
                 if (fb && !/^https?:\\/\\//i.test(fb)) fb = 'https://' + fb;
 
@@ -72,7 +50,7 @@ export default function ThanksPage() {
                 try {
                   const a = document.getElementById('fallbackLink');
                   a.href = fb; a.style.display = 'inline-block';
-                  a.textContent = 'Continue to WhatsApp';
+                  a.textContent = 'Continue';
                 } catch {}
 
                 const go = () => {
