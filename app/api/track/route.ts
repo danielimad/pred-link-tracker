@@ -13,7 +13,6 @@ type Geo = {
   tz?: string;
 };
 
-// Paid/optional providers (leave tokens empty if you like)
 async function ipinfo(ip: string, token?: string): Promise<Partial<Geo>> {
   if (!token || !ip) return {};
   const r = await fetch(`https://ipinfo.io/${encodeURIComponent(ip)}?token=${token}`, { cache: 'no-store' });
@@ -53,7 +52,7 @@ async function ipdata(ip: string, key?: string): Promise<Partial<Geo>> {
   };
 }
 
-// Free fallback (no key)
+// Free passive IP geo (no key)
 async function ipapi(ip: string): Promise<Partial<Geo>> {
   if (!ip) return {};
   const r = await fetch(`https://ipapi.co/${encodeURIComponent(ip)}/json/`, { cache: 'no-store' });
@@ -72,37 +71,28 @@ async function ipapi(ip: string): Promise<Partial<Geo>> {
   };
 }
 
-// Free reverse-geocode for client lat/lon (no key)
-async function reverseGeo(lat: number, lon: number): Promise<Partial<Geo>> {
-  try {
-    const r = await fetch(
-      `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lon}&localityLanguage=en`,
-      { cache: 'no-store' }
-    );
-    if (!r.ok) return {};
-    const j: any = await r.json();
-    return {
-      country: j.countryName || j.countryCode,
-      region: j.principalSubdivision || (j.localityInfo?.administrative?.[0]?.name) || undefined,
-      city: j.city || j.locality || j.principalSubdivisionLocality || undefined,
-    };
-  } catch {
-    return {};
-  }
-}
-
-function mergePriority(client: Partial<Geo>, a: Partial<Geo>, b: Partial<Geo>, c: Partial<Geo>, hdr: Partial<Geo>, ip: string, tzClient?: string): Geo {
+// Another free passive IP geo (no key)
+async function ipwho(ip: string): Promise<Partial<Geo>> {
+  if (!ip) return {};
+  const r = await fetch(`https://ipwho.is/${encodeURIComponent(ip)}?output=json`, { cache: 'no-store' });
+  if (!r.ok) return {};
+  const j: any = await r.json();
   return {
     ip,
-    asn:     client.asn     ?? a.asn     ?? b.asn     ?? c.asn     ?? hdr.asn,
-    org:     client.org     ?? a.org     ?? b.org     ?? c.org     ?? hdr.org,
-    country: client.country ?? a.country ?? b.country ?? c.country ?? hdr.country,
-    region:  client.region  ?? a.region  ?? b.region  ?? c.region  ?? hdr.region,
-    city:    client.city    ?? a.city    ?? b.city    ?? c.city    ?? hdr.city,
-    lat:     client.lat     ?? a.lat     ?? b.lat     ?? c.lat,
-    lon:     client.lon     ?? a.lon     ?? b.lon     ?? c.lon,
-    tz:      tzClient       ?? a.tz      ?? b.tz      ?? c.tz      ?? hdr.tz,
+    asn: j.connection?.asn,
+    org: j.connection?.org,
+    country: j.country || j.country_code,
+    region:  j.region,
+    city:    j.city,
+    lat: typeof j.latitude === 'number' ? j.latitude : undefined,
+    lon: typeof j.longitude === 'number' ? j.longitude : undefined,
+    tz:  j.timezone?.id || j.timezone,
   };
+}
+
+function best<T>(...vals: (T | undefined)[]): T | undefined {
+  for (const v of vals) { if (v !== undefined && v !== null && (typeof v !== 'string' || v.trim())) return v; }
+  return undefined;
 }
 
 export async function POST(req: NextRequest) {
@@ -114,60 +104,49 @@ export async function POST(req: NextRequest) {
 
   const id = String(b.id || b.link_id || '');
 
-  // Real client IP
+  // Client IP (first XFF element)
   const xff = req.headers.get('x-forwarded-for') || '';
   const ipHeader = xff.split(',')[0].trim();
   const ip = ipHeader || '';
 
-  // Vercel header hints
-  const hdr: Partial<Geo> = {
-    ip,
+  // Vercel hints (cheap & always present)
+  const hdr = {
     country: req.headers.get('x-vercel-ip-country') || undefined,
     region:  req.headers.get('x-vercel-ip-country-region') || req.headers.get('x-vercel-ip-region') || undefined,
     city:    req.headers.get('x-vercel-ip-city') || undefined,
     tz:      req.headers.get('x-vercel-ip-timezone') || undefined,
   };
 
-  // Optional client lat/lon & tz
-  const latNum = Number.isFinite(Number(b.lat)) ? Number(b.lat) : undefined;
-  const lonNum = Number.isFinite(Number(b.lon)) ? Number(b.lon) : undefined;
-  const tzClient = typeof b.tz === 'string' && b.tz ? b.tz : undefined;
-
-  let client: Partial<Geo> = {};
-  if (typeof latNum === 'number' && typeof lonNum === 'number') {
-    client.lat = latNum;
-    client.lon = lonNum;
-    const rev = await reverseGeo(latNum, lonNum);
-    client.country = rev.country || client.country;
-    client.region  = rev.region  || client.region;
-    client.city    = rev.city    || client.city;
-  }
-
-  // Providers (parallel; tolerate failures)
-  const [p1, p2, p3] = await Promise.allSettled([
+  // Query providers in parallel (tolerant)
+  const [p1, p2, p3, p4] = await Promise.allSettled([
     ipinfo(ip, process.env.IPINFO_TOKEN),
     ipdata(ip, process.env.IPDATA_KEY),
     ipapi(ip),
+    ipwho(ip),
   ]);
 
   const g1 = p1.status === 'fulfilled' ? p1.value : {};
   const g2 = p2.status === 'fulfilled' ? p2.value : {};
   const g3 = p3.status === 'fulfilled' ? p3.value : {};
-  const g  = mergePriority(client, g1, g2, g3, hdr, ip, tzClient);
+  const g4 = p4.status === 'fulfilled' ? p4.value : {};
+
+  const lat = best(g1.lat, g2.lat, g3.lat, g4.lat);
+  const lon = best(g1.lon, g2.lon, g3.lon, g4.lon);
 
   const payload = {
     id,
     ip,
     ua: String(b.ua || ''),
     ref: String(b.ref || b.referer || ''),
-    country: g.country || '',
-    region:  g.region  || '',
-    city:    g.city    || '',
-    asn:     g.asn     || '',
-    org:     g.org     || '',
-    lat:     typeof g.lat === 'number' ? g.lat : '',
-    lon:     typeof g.lon === 'number' ? g.lon : '',
-    tz:      g.tz      || '',
+
+    country: best(g1.country, g2.country, g3.country, g4.country, hdr.country) || '',
+    region:  best(g1.region,  g2.region,  g3.region,  g4.region,  hdr.region)  || '',
+    city:    best(g1.city,    g2.city,    g3.city,    g4.city,    hdr.city)    || '',
+    asn:     best(g1.asn,     g2.asn,     g3.asn,     g4.asn)                 || '',
+    org:     best(g1.org,     g2.org,     g3.org,     g4.org)                 || '',
+    lat:     typeof lat === 'number' ? lat : '',
+    lon:     typeof lon === 'number' ? lon : '',
+    tz:      String(b.tz || best(g1.tz, g2.tz, g3.tz, g4.tz, hdr.tz) || ''),
   };
 
   const resp = await fetch(`${scriptBase}?path=visit`, {
