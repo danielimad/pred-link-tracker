@@ -76,11 +76,16 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: 'missing-script-base' }, { status: 500 });
   }
 
+  // Get body (UA/ref; we will ignore any body ip)
   let b: any = {};
   try { b = await req.json(); } catch {}
 
   const id = String(b.id || b.link_id || '');
-  const ip = String(b.ip || '');
+
+  // ✅ Derive the real client IP from headers INSIDE the handler
+  const xff = req.headers.get('x-forwarded-for') || '';
+  const ipHeader = xff.split(',')[0].trim();
+  const ip = ipHeader || ''; // prefer header; do NOT trust body ip
 
   // Enrich IP via providers in parallel; tolerate missing keys
   const [g1, g2] = await Promise.allSettled([
